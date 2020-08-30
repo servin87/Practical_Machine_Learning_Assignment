@@ -1,0 +1,98 @@
+---
+title: "Prediction Assignment Writeup"
+author: "Jesus Felix"
+date: "8/23/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Executive Summary
+In this report I use the measurements of multiple sensors from wearables to predict how a specific type of exercise was predicted. The source of the data can be found here. After a quick exploratory analysis, I use 52 of the XX variables to train 
+## Introduction
+In this report, data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants is used to predict the manner in which barbell lifts were performed. Each participant was asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available [here](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har). The goal is to predict how the exercise was performed (`classe`) based on the sensors readings. We have been provided with a training and a testing dataset. While the training dataset contains the `classe` for each observation, the testing does not. 
+
+## Exploratory Data Analysis
+We begin by loading the datasets (train and test) and conduct a quick exploratory analysis on the training data. The dataset consists of 160 variables, and 19622 observations for the training set and 20 for the test set. While loading the data, I replaced all cells that contain `NA`, `Nan`, `" "` and `""` to `NA` to make it easier to locate and quantify missing data.  
+```{r}
+train <- read.csv('pml-training.csv', header=T, na.strings=c("NA","NaN", " ", ""))
+test <- read.csv('pml-testing.csv', header=T, na.strings=c("NA","NaN", " ",""))
+dim(train)
+dim(test)
+#summary (train)
+#table(is.na(train))
+#sapply(train, function(x) sum(is.null(x))/length(train$X))
+```
+Looking at the variables, I noticed that the first seven are not related to the sensors measurements and thus irrelevant to this study, because we are trying to predict how the exercise was performed based on the data coming from the sensors. Therefore, I removed the first seven variables from both sets.
+```{r}
+names(train)[1:7]
+train<-train[,-(1:7)]
+test<-test[,-(1:7)]
+dim(train)
+```
+
+Next, I checked for columns with `NA` and removed all variables with a percentage of `NA` higher than 50%. In fact, it appears that the columns either have no `NA` or ~98% `NA`. After removing variables with a high proportion of missing data, we end up with 53 variables, including the `classe` which is what we want to predict. 
+```{r}
+nas<-as.data.frame(sapply(train, function(x) sum(is.na(x))/dim(train)[1]))
+names(nas)<-c("Percentage")
+#nas$Percentage
+col_remove<-nas$Percentage<0.5
+#col_remove
+col_names<-names(train)
+train<-train[,col_names[col_remove]]
+test<-test[,col_names[col_remove][1:length(col_names[col_remove])-1]]
+dim(train)
+table(sapply(train,class))
+dim(test)
+table(sapply(test,class))
+```
+Before proceeding to build the prediction model, I used `nearZeroVar()` to evaluate if any of the remaining variables had little variance and was therefore, candidate to be excluded. The results indicate that none of the considered predictors meet the near zero variance criteria. I therefore decided to use all 52 variables to train the prediction models. I have also checked the frequency of each `classe` (**Fig. 1**). While `A` seems to be over represented, I decided that the difference is not big enough to justify down-sampling the data. It is worth mentioning that trying to balance the data brings its own uncertainty. In addition, it is possible that `A` has higher frequency in a real scenario because sports enthusiasts are likely to perform their exercises correctly. 
+```{r}
+library (caret)
+nearZeroVar(train)
+barplot(table(train$classe), main="Fig. 1 Frequency of each classe")
+```
+As a final step before proceeding with the model, I decided to split the training set into a training (70%) and validation (30%) set, to get a better estimate of the out of sample error.
+```{r}
+set.seed(9753)
+splitTrain <- createDataPartition(train$classe, p = 0.7, list = FALSE)
+train_set <- train[splitTrain,]
+validation_set <- train[-splitTrain,]
+dim(train_set)
+dim(validation_set)
+```
+There are multiple approaches suitable for this kind of classification. I have decided to compare three of them and choose the best performing one for the prediction exercise. For the purpose of this analysis I have chosen a Random Forest (RF) classifier, Gradient Boosting Machine (GBM) and Recursive Partitioning And Regression Trees (RPART). 10-fold cross validation was performed for all models. 
+```{r}
+  train_ctrl <- trainControl(method = "cv", number = 10)
+  mod_rf <- train(classe ~ .,
+                  data = train_set,
+                  method = "rf",
+                  trControl = train_ctrl,
+                  do.trace = 500,
+                  verbose = FALSE, importance=TRUE)
+  
+  mod_gbm <- train(
+  classe ~ ., 
+  data=train_set,
+  trControl=train_ctrl,
+  method="gbm")
+  
+  mod_cart <- train(
+  classe ~ ., 
+  data=train_set,
+  trControl=train_ctrl,
+  method='rpart')
+  
+pred_rf <- predict(mod_rf, newdata = validation_set)
+pred_gbm <- predict(mod_gbm, newdata = validation_set)
+pred_cart <- predict(mod_cart, newdata = validation_set)
+cm_rf <- confusionMatrix(pred_rf, validation_set$classe)
+cm_gbm <- confusionMatrix(pred_gbm, validation_set$classe)
+cm_cart <- confusionMatrix(pred_cart, validation_set$classe)
+cm_rf
+cm_gbm
+cm_cart
+```
+The results show that the RF fit has the highest accuracy on the validation test (99.29%), followed closely by the GBM fit (95.14). The accuracy of the RPART fit is significantly lower, at 48.16%. 
